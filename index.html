@@ -68,6 +68,10 @@ td.r,th.r{text-align:right;}
  border-radius:10px;margin-bottom:7px;background:var(--panel);font-size:14px;}
 .chk input{width:19px;height:19px;accent-color:var(--flag);flex-shrink:0;}
 .note{font-size:12px;color:var(--muted);line-height:1.5;}
+.banner{font-family:"American Typewriter","Courier New",monospace;text-transform:uppercase;
+ letter-spacing:.14em;font-size:10px;color:var(--hot);border-top:1px solid var(--hot);
+ padding-top:7px;margin:4px 0 12px;}
+.banner.quiet{color:var(--muted);border-color:var(--line);margin-top:26px;}
 .err{border:1px solid var(--hot);border-radius:10px;padding:12px;font-size:13px;line-height:1.5;
  background:rgba(217,69,95,.09);margin-bottom:12px;}
 .empty{text-align:center;padding:34px 16px;color:var(--muted);font-size:13px;line-height:1.6;}
@@ -89,7 +93,7 @@ td.r,th.r{text-align:right;}
 
 var API="https://api.sleeper.app/v1", INACTIVE_WEEKS=3, PICK_HORIZON=3;
 var S={view:"boot",cfg:[],username:"",found:null,week:1,data:{},players:null,
-       busy:false,pbusy:false,err:"",open:null,tab:"flags",toast:"",step:""};
+       busy:false,pbusy:false,err:"",open:null,tab:"flags",toast:"",step:"",audit:false,allmoves:false,pfail:false};
 
 /* ---------- storage (localStorage, degrades to memory) ---------- */
 var mem={};
@@ -138,7 +142,7 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){
 /* ---------- flags ---------- */
 function computeFlags(L){
   var out=[], who=function(r){return L.names[r]||("roster "+r);};
-  function add(kind,text,rid,hot){out.push({kind:kind,text:text,who:who(rid),hot:!!hot});}
+  function add(kind,text,rid,hot){out.push({kind:kind,text:text,who:who(rid),hot:!!hot,tier:hot?"core":"audit"});}
 
   L.matchups.forEach(function(m){
     var e=(m.starters||[]).filter(function(s){return String(s)==="0";}).length;
@@ -189,7 +193,7 @@ function computeFlags(L){
   var season=parseInt(L.meta.season||new Date().getFullYear(),10), seen={};
   L.picks.forEach(function(p){ if(parseInt(p.season,10)>season+PICK_HORIZON) seen[p.season]=1; });
   var far=Object.keys(seen).sort();
-  if(far.length) out.push({kind:"Pick horizon",who:"League-wide",
+  if(far.length) out.push({tier:"audit",kind:"Pick horizon",who:"League-wide",
     text:"Picks traded for "+far.join(", ")+" — beyond "+PICK_HORIZON+" years out. Confirm the constitution allows it."});
 
   return out;
@@ -260,6 +264,7 @@ async function boot(){
   catch(e){ S.err="Couldn't reach Sleeper. Check your connection, then reload."; }
   S.view=S.cfg.length?"home":"setup"; render();
   if(S.cfg.length) refresh();
+  if(!S.players) loadPlayers();
 }
 
 async function refresh(){
@@ -315,7 +320,7 @@ async function loadPlayers(){
     });
     S.players=trim; put("booth:players",trim);
     S.toast="Player names loaded"; setTimeout(function(){S.toast="";render();},1800);
-  }catch(e){ S.err="The player file didn't download. Try again on wifi."; }
+  }catch(e){ S.pfail=true; }
   S.pbusy=false; render();
 }
 
@@ -368,38 +373,44 @@ function viewSetup(){
 }
 
 function viewHome(){
-  var total=0, fl={};
+  var total=0, minor=0, fl={};
   S.cfg.forEach(function(l){
     var L=S.data[l.league_id];
     fl[l.league_id]=L?computeFlags(L):null;
-    if(fl[l.league_id]) total+=fl[l.league_id].length;
+    (fl[l.league_id]||[]).forEach(function(f){ f.tier==="core"?total++:minor++; });
   });
   var loaded=Object.keys(S.data).length;
   var h=bar("The Booth",S.cfg.length+" leagues",true)+'<div class="wrap">';
   if(S.err) h+='<div class="err">'+esc(S.err)+'</div>';
-  h+='<div class="row" style="margin-bottom:14px"><div><div class="eyebrow">Flags on the field</div>'+
+  h+='<div class="row" style="margin-bottom:14px"><div><div class="eyebrow">Needs a message</div>'+
      '<div class="num" style="font-size:30px;font-weight:700;line-height:1.1;color:'+
-     (total?"var(--flag)":"var(--ok)")+'">'+(loaded?total:"—")+'</div></div>'+
+     (total?"var(--hot)":"var(--ok)")+'">'+(loaded?total:"—")+'</div>'+
+     (loaded&&minor?'<div class="note" style="margin-top:3px">'+minor+' housekeeping item'+(minor>1?"s":"")+'</div>':'')+'</div>'+
      '<div style="text-align:right"><div class="eyebrow">Week</div>'+
      '<div class="num" style="font-size:30px;font-weight:700;line-height:1.1">'+S.week+'</div></div></div>';
-  if(!S.players)
-    h+='<button class="btn" onclick="loadPlayers()"'+(S.pbusy?" disabled":"")+'>'+
-       (S.pbusy?"Downloading player file…":"Load player names (large file, once)")+'</button>';
+  if(!S.players&&S.pbusy)
+    h+='<p class="note" style="margin-bottom:12px">Loading player names in the background…</p>';
+  if(!S.players&&S.pfail)
+    h+='<button class="btn" onclick="S.pfail=false;loadPlayers()">Player names didn\'t load — retry</button>';
   S.cfg.forEach(function(l){
     var L=S.data[l.league_id], f=fl[l.league_id];
     var hot=f?f.filter(function(x){return x.hot;}).length:0;
+    var core=f?f.filter(function(x){return x.tier==="core";}):[];
     var right='';
     if(f&&!f.length) right='<span class="clean">CLEAN</span>';
     else if(f&&f.length){
-      right='<div class="pips">'+f.slice(0,4).map(function(x){
+      var lead=core.length?core:f;
+      right='<div class="pips">'+lead.slice(0,4).map(function(x){
         return '<div class="pip'+(x.hot?" hot":"")+'"></div>';}).join("")+'</div>'+
-        '<span class="flagcount num"'+(hot?' style="color:var(--hot)"':'')+'>'+f.length+'</span>';
+        '<span class="flagcount num"'+(core.length?' style="color:var(--hot)"':'')+'>'+
+        (core.length||f.length)+'</span>';
     }
     h+='<button class="card" onclick="S.open=\''+l.league_id+'\';S.tab=\'flags\';S.view=\'league\';render()">'+
        '<div class="row"><div style="min-width:0"><div class="lname">'+
        esc((L&&L.meta.name)||l.name)+'</div><div class="sub">'+
        (L?(L.rosters.length+" teams"+((L.meta.settings||{}).trade_deadline?
-          " · deadline wk "+L.meta.settings.trade_deadline:"")):"Loading…")+
+          " · deadline wk "+L.meta.settings.trade_deadline:"")+
+          (core.length&&f.length>core.length?" · "+(f.length-core.length)+" housekeeping":"")):"Loading…")+
        '</div></div><div class="flagstack">'+right+'</div></div></button>';
   });
   h+='<button class="btn ghost" style="margin-top:14px" onclick="refresh()">'+
@@ -422,17 +433,29 @@ function viewLeague(){
 
   if(S.tab==="flags"){
     if(!flags.length) h+='<div class="empty">Nothing to chase in this league.<br>Enjoy the quiet week.</div>';
-    var groups={};
-    flags.forEach(function(f){(groups[f.kind]=groups[f.kind]||[]).push(f);});
-    Object.keys(groups).forEach(function(k){
-      h+='<div class="sec"><div class="sechd"><span class="eyebrow">'+esc(k)+'</span></div>';
-      groups[k].forEach(function(f){
-        h+='<div class="item'+(f.hot?" hot":"")+'"><b>'+esc(f.text)+'</b>'+
-           '<span class="who">'+esc(f.who)+'</span></div>';
+    function block(list){
+      var groups={};
+      list.forEach(function(f){(groups[f.kind]=groups[f.kind]||[]).push(f);});
+      var out="";
+      Object.keys(groups).forEach(function(k){
+        out+='<div class="sec"><div class="sechd"><span class="eyebrow">'+esc(k)+'</span></div>';
+        groups[k].forEach(function(f){
+          out+='<div class="item'+(f.hot?" hot":"")+'"><b>'+esc(f.text)+'</b>'+
+               '<span class="who">'+esc(f.who)+'</span></div>';
+        });
+        out+='</div>';
       });
-      h+='</div>';
-    });
-    if(!S.players) h+='<p class="note">IR and taxi checks need the player file. Load it from the home screen.</p>';
+      return out;
+    }
+    var core=flags.filter(function(f){return f.tier==="core";});
+    var audit=flags.filter(function(f){return f.tier!=="core";});
+    if(core.length){
+      h+='<div class="banner">Worth a message this week</div>'+block(core);
+    }
+    if(audit.length){
+      h+='<div class="banner quiet">Housekeeping — no rush</div>'+block(audit);
+    }
+    if(!S.players) h+='<p class="note">IR and taxi checks fill in once player names finish loading.</p>';
     if(flags.length) h+='<button class="btn" onclick="copyFlags()">Copy flags for my notes</button>';
   }
 
@@ -468,20 +491,39 @@ function viewLeague(){
   if(S.tab==="moves"){
     var txs=(L.txByWeek[L.week]||[]).filter(function(t){return t.status==="complete";});
     if(!txs.length) h+='<div class="empty">No completed moves in week '+L.week+'.</div>';
-    txs.forEach(function(t){
-      var bid=(t.settings||{}).waiver_bid;
-      h+='<div class="card" style="animation:none"><div class="eyebrow" style="margin-bottom:6px">'+
-         (t.type==="trade"?"Trade":t.type==="waiver"?"Waiver":"Free agent")+(bid?" · $"+bid:"")+'</div>';
+    var trades=txs.filter(function(t){return t.type==="trade";});
+    var rest=txs.filter(function(t){return t.type!=="trade";});
+    function card(t){
+      var bid=(t.settings||{}).waiver_bid, body="";
       Object.keys(t.adds||{}).forEach(function(pid){
-        h+='<div style="font-size:13px;margin-bottom:3px">'+esc(pName(pid))+
-           ' <span style="color:var(--muted)">to</span> '+esc(L.names[t.adds[pid]])+'</div>';
+        body+='<div style="font-size:13px;margin-bottom:3px">'+esc(pName(pid))+
+              ' <span style="color:var(--muted)">to</span> '+esc(L.names[t.adds[pid]])+'</div>';
+      });
+      Object.keys(t.drops||{}).forEach(function(pid){
+        body+='<div style="font-size:13px;margin-bottom:3px;color:var(--muted)">'+esc(pName(pid))+
+              ' dropped by '+esc(L.names[t.drops[pid]])+'</div>';
       });
       (t.draft_picks||[]).forEach(function(p){
-        h+='<div style="font-size:13px;margin-bottom:3px">'+p.season+' round '+p.round+
-           ' <span style="color:var(--muted)">to</span> '+esc(L.names[p.owner_id])+'</div>';
+        body+='<div style="font-size:13px;margin-bottom:3px">'+p.season+' round '+p.round+
+              ' <span style="color:var(--muted)">to</span> '+esc(L.names[p.owner_id])+'</div>';
       });
-      h+='</div>';
-    });
+      if(!body) return "";
+      return '<div class="card" style="animation:none"><div class="eyebrow" style="margin-bottom:6px">'+
+        (t.type==="trade"?"Trade":t.type==="waiver"?"Waiver":"Free agent")+(bid?" · $"+bid:"")+
+        '</div>'+body+'</div>';
+    }
+    if(trades.length){
+      h+='<div class="sechd"><span class="eyebrow">Trades</span></div>';
+      trades.forEach(function(t){h+=card(t);});
+    }
+    if(rest.length){
+      h+='<div class="sechd" style="margin-top:18px"><span class="eyebrow">Waivers and free agents</span></div>';
+      if(!S.allmoves){
+        rest.slice(0,6).forEach(function(t){h+=card(t);});
+        if(rest.length>6) h+='<button class="btn ghost" onclick="S.allmoves=1;render()">Show all '+
+          rest.length+' claims</button>';
+      } else rest.forEach(function(t){h+=card(t);});
+    }
   }
 
   h+='<button class="btn go" style="margin-top:18px" onclick="copyPost()">Copy the league post</button>'+
