@@ -89,7 +89,7 @@ td.r,th.r{text-align:right;}
 
 var API="https://api.sleeper.app/v1", INACTIVE_WEEKS=3, PICK_HORIZON=3;
 var S={view:"boot",cfg:[],username:"",found:null,week:1,data:{},players:null,
-       busy:false,pbusy:false,err:"",open:null,tab:"flags",toast:""};
+       busy:false,pbusy:false,err:"",open:null,tab:"flags",toast:"",step:""};
 
 /* ---------- storage (localStorage, degrades to memory) ---------- */
 var mem={};
@@ -280,7 +280,20 @@ async function discover(){
     var st=await api("/state/nfl");
     var ls=await api("/user/"+u.user_id+"/leagues/nfl/"+((st&&st.season)||new Date().getFullYear()));
     if(!ls||!ls.length){ S.err="That account isn't in any leagues this season."; S.busy=false; return render(); }
-    S.found=ls.map(function(l){return {league_id:l.league_id,name:l.name,on:true};});
+    S.step="Checking which ones you commission…"; render();
+    var owns=await Promise.all(ls.map(async function(l){
+      try{
+        var us=await api("/league/"+l.league_id+"/users");
+        var me=(us||[]).filter(function(x){return x.user_id===u.user_id;})[0];
+        return !!(me&&me.is_owner);
+      }catch(e){ return false; }
+    }));
+    var rows=ls.map(function(l,i){
+      return {league_id:l.league_id,name:l.name,commish:owns[i],on:owns[i]};
+    });
+    rows.sort(function(a,b){ return (b.commish?1:0)-(a.commish?1:0); });
+    if(!rows.some(function(r){return r.commish;})) rows.forEach(function(r){r.on=true;});
+    S.found=rows; S.step="";
     put("booth:user",S.username);
   }catch(e){ S.err="Couldn't reach Sleeper. Try again in a moment."; }
   S.busy=false; render();
@@ -329,16 +342,26 @@ function viewSetup(){
        '<input class="inp" id="u" value="'+esc(S.username)+'" placeholder="Sleeper username" '+
        'autocapitalize="none" autocorrect="off">'+
        '<button class="btn go" onclick="discover()"'+(S.busy?" disabled":"")+'>'+
-       (S.busy?"Looking…":"Find my leagues")+'</button>';
+       (S.busy?(S.step||"Looking…"):"Find my leagues")+'</button>';
   } else {
+    var found=S.found.filter(function(f){return f.commish;}).length;
     h+='<p class="eyebrow" style="margin-bottom:8px">Step two</p>'+
-       '<p class="note" style="margin-bottom:14px">Uncheck the leagues you only play in. '+
-       'You can change this later.</p>';
+       '<p class="note" style="margin-bottom:14px">'+
+       (found? "Sleeper lists you as commissioner of "+found+" league"+(found>1?"s":"")+
+               ", already checked below. Adjust if you co-commission one that isn't marked."
+             : "Sleeper doesn't list you as commissioner of any of these, so they're all checked. "+
+               "Uncheck the ones you only play in.")+'</p>';
+    var wasCommish=null;
     S.found.forEach(function(f,i){
+      if(f.commish!==wasCommish){
+        wasCommish=f.commish;
+        h+='<div class="sechd" style="margin:16px 0 9px"><span class="eyebrow">'+
+           (f.commish?"You commission":"You only play in")+'</span></div>';
+      }
       h+='<label class="chk"><input type="checkbox"'+(f.on?" checked":"")+
          ' onchange="S.found['+i+'].on=this.checked"><span>'+esc(f.name)+'</span></label>';
     });
-    h+='<button class="btn go" style="margin-top:10px" onclick="saveLeagues()">Use these leagues</button>'+
+    h+='<button class="btn go" style="margin-top:14px" onclick="saveLeagues()">Use the checked leagues</button>'+
        '<button class="btn ghost" onclick="S.found=null;render()">Start over</button>';
   }
   return h+'</div>';
