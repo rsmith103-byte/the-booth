@@ -68,6 +68,16 @@ td.r,th.r{text-align:right;}
  border-radius:10px;margin-bottom:7px;background:var(--panel);font-size:14px;}
 .chk input{width:19px;height:19px;accent-color:var(--flag);flex-shrink:0;}
 .note{font-size:12px;color:var(--muted);line-height:1.5;}
+.mini{margin-top:7px;background:transparent;border:1px solid var(--line);color:var(--muted);
+ border-radius:7px;padding:5px 9px;font-size:11px;font-family:inherit;font-weight:600;}
+.mini:active{background:var(--panel2);color:var(--text);}
+.tmpl{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px;margin-bottom:9px;}
+.tmpl h4{margin:0 0 6px;font-size:14px;font-weight:600;}
+.tmpl p{margin:0 0 10px;font-size:12px;color:var(--muted);line-height:1.55;white-space:pre-wrap;}
+.chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:10px;margin-bottom:6px;}
+.chip{flex:0 0 auto;background:var(--panel);border:1px solid var(--line);color:var(--muted);
+ border-radius:99px;padding:8px 13px;font-size:12px;font-family:inherit;font-weight:600;white-space:nowrap;}
+.chip.on{background:var(--flag);border-color:var(--flag);color:#101922;}
 .banner{font-family:"American Typewriter","Courier New",monospace;text-transform:uppercase;
  letter-spacing:.14em;font-size:10px;color:var(--hot);border-top:1px solid var(--hot);
  padding-top:7px;margin:4px 0 12px;}
@@ -93,7 +103,7 @@ td.r,th.r{text-align:right;}
 
 var API="https://api.sleeper.app/v1", INACTIVE_WEEKS=3, PICK_HORIZON=3;
 var S={view:"boot",cfg:[],username:"",found:null,week:1,data:{},players:null,
-       busy:false,pbusy:false,err:"",open:null,tab:"flags",toast:"",step:"",audit:false,allmoves:false,pfail:false};
+       busy:false,pbusy:false,err:"",open:null,tab:"flags",toast:"",step:"",msgLeague:"",audit:false,allmoves:false,pfail:false};
 
 /* ---------- storage (localStorage, degrades to memory) ---------- */
 var mem={};
@@ -142,11 +152,15 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){
 /* ---------- flags ---------- */
 function computeFlags(L){
   var out=[], who=function(r){return L.names[r]||("roster "+r);};
-  function add(kind,text,rid,hot){out.push({kind:kind,text:text,who:who(rid),hot:!!hot,tier:hot?"core":"audit"});}
+  function add(kind,text,rid,hot,msg){
+    out.push({kind:kind,text:text,who:who(rid),hot:!!hot,tier:hot?"core":"audit",msg:msg||""});
+  }
 
   L.matchups.forEach(function(m){
     var e=(m.starters||[]).filter(function(s){return String(s)==="0";}).length;
-    if(e) add("Empty starting slots",e+" unfilled slot"+(e>1?"s":"")+" in week "+L.week,m.roster_id,true);
+    if(e) add("Empty starting slots",e+" unfilled slot"+(e>1?"s":"")+" in week "+L.week,m.roster_id,true,
+      "Hey "+who(m.roster_id)+" — you went into week "+L.week+" with "+e+" empty starting spot"+
+      (e>1?"s":"")+". No penalty, just flagging it. Everything good on your end?");
   });
 
   var active={};
@@ -156,8 +170,14 @@ function computeFlags(L){
     });
   });
   L.rosters.forEach(function(rs){
-    if(!active[rs.roster_id]) add("Gone quiet","No completed moves in "+INACTIVE_WEEKS+" weeks",rs.roster_id,true);
-    if(!rs.owner_id) add("Orphan team","No owner attached to this roster",rs.roster_id,true);
+    if(!active[rs.roster_id]) add("Gone quiet","No completed moves in "+INACTIVE_WEEKS+" weeks",rs.roster_id,true,
+      "Hey "+who(rs.roster_id)+" — haven't seen any moves from you in a few weeks and wanted to check in. "+
+      "Still good to keep running the team? If life got busy and you'd rather hand it off, no hard feelings at all — "+
+      "just tell me early so I can line up a replacement before it affects anyone's season.");
+    if(!rs.owner_id) add("Orphan team","No owner attached to this roster",rs.roster_id,true,
+      "Opening in "+(L.meta.name||"the league")+": we've got an orphan team available. "+
+      "Dynasty, "+L.rosters.length+" teams. If you know someone who'd be a good fit and will actually stay "+
+      "engaged in the offseason, send them my way and I'll walk them through the roster.");
   });
 
   if(S.players){
@@ -165,14 +185,19 @@ function computeFlags(L){
       (rs.reserve||[]).forEach(function(pid){
         var st=(S.players[String(pid)]||[])[4];
         if(!st||st==="Questionable"||st==="Probable")
-          add("IR misuse",pName(pid)+" on IR — status "+(st||"healthy"),rs.roster_id);
+          add("IR misuse",pName(pid)+" on IR — status "+(st||"healthy"),rs.roster_id,false,
+            "Hey "+who(rs.roster_id)+" — "+pName(pid)+" is showing as "+(st||"healthy")+
+            " but is sitting in your IR slot. Can you move him to the bench when you get a minute? Thanks.");
       });
     });
     var lim=(L.meta.settings||{}).taxi_years;
     if(lim) L.rosters.forEach(function(rs){
       (rs.taxi||[]).forEach(function(pid){
         var exp=(S.players[String(pid)]||[])[3];
-        if(exp!=null&&exp>lim) add("Taxi eligibility",pName(pid)+" — "+exp+" yrs exp, limit "+lim,rs.roster_id);
+        if(exp!=null&&exp>lim) add("Taxi eligibility",pName(pid)+" — "+exp+" yrs exp, limit "+lim,rs.roster_id,false,
+          "Hey "+who(rs.roster_id)+" — "+pName(pid)+" is past our taxi limit of "+lim+
+          " years, so he needs to come off the taxi squad and onto the active roster or bench. "+
+          "Let me know if that creates a roster crunch and we'll sort it out.");
       });
     });
   }
@@ -180,21 +205,30 @@ function computeFlags(L){
   var slots=(L.meta.roster_positions||[]).filter(function(p){return p!=="TAXI"&&p!=="IR";}).length;
   if(slots) L.rosters.forEach(function(rs){
     var act=(rs.players||[]).length-(rs.taxi||[]).length-(rs.reserve||[]).length;
-    if(act>slots) add("Over roster limit",act+" active, cap is "+slots,rs.roster_id);
-    else if(act<slots-2) add("Thin roster",act+" active of "+slots+" — check for abandonment",rs.roster_id);
+    if(act>slots) add("Over roster limit",act+" active, cap is "+slots,rs.roster_id,false,
+      "Hey "+who(rs.roster_id)+" — you're at "+act+" active players and our cap is "+slots+
+      ". Can you get down to the limit before this week's games lock?");
+    else if(act<slots-2) add("Thin roster",act+" active of "+slots+" — check for abandonment",rs.roster_id,false,
+      "Hey "+who(rs.roster_id)+" — you're carrying "+act+" active players against a "+slots+
+      " man roster. Plenty of free agents out there if you want to fill out the bench.");
   });
 
   var budget=(L.meta.settings||{}).waiver_budget;
   if(budget) L.rosters.forEach(function(rs){
     var left=budget-((rs.settings||{}).waiver_budget_used||0);
-    if(left<=budget*0.1) add("FAAB spent","$"+left+" of $"+budget+" left",rs.roster_id);
+    if(left<=budget*0.1) add("FAAB spent","$"+left+" of $"+budget+" left",rs.roster_id,false,
+      "Heads up "+who(rs.roster_id)+" — you're down to $"+left+" of your $"+budget+
+      " FAAB with the season still going. Just want to make sure that's deliberate and not a surprise later.");
   });
 
   var season=parseInt(L.meta.season||new Date().getFullYear(),10), seen={};
   L.picks.forEach(function(p){ if(parseInt(p.season,10)>season+PICK_HORIZON) seen[p.season]=1; });
   var far=Object.keys(seen).sort();
   if(far.length) out.push({tier:"audit",kind:"Pick horizon",who:"League-wide",
-    text:"Picks traded for "+far.join(", ")+" — beyond "+PICK_HORIZON+" years out. Confirm the constitution allows it."});
+    text:"Picks traded for "+far.join(", ")+" — beyond "+PICK_HORIZON+" years out. Confirm the constitution allows it.",
+    msg:"Quick note for everyone: we've got picks changing hands for "+far.join(" and ")+
+        ". Before those trades pile up, I want to confirm we all read the constitution the same way on how far "+
+        "out picks can be dealt. If anyone thinks we should cap it, say so now rather than in three years."});
 
   return out;
 }
@@ -413,7 +447,8 @@ function viewHome(){
           (core.length&&f.length>core.length?" · "+(f.length-core.length)+" housekeeping":"")):"Loading…")+
        '</div></div><div class="flagstack">'+right+'</div></div></button>';
   });
-  h+='<button class="btn ghost" style="margin-top:14px" onclick="refresh()">'+
+  h+='<button class="btn" style="margin-top:14px" onclick="S.view=\'msgs\';render()">Message library</button>'+
+     '<button class="btn ghost" onclick="refresh()">'+
      (S.busy?"Refreshing…":"Refresh all leagues")+'</button>'+
      '<button class="btn ghost" onclick="S.found=null;S.view=\'setup\';render()">Change leagues</button>';
   return h+'</div>';
@@ -440,8 +475,11 @@ function viewLeague(){
       Object.keys(groups).forEach(function(k){
         out+='<div class="sec"><div class="sechd"><span class="eyebrow">'+esc(k)+'</span></div>';
         groups[k].forEach(function(f){
+          var i=flags.indexOf(f);
           out+='<div class="item'+(f.hot?" hot":"")+'"><b>'+esc(f.text)+'</b>'+
-               '<span class="who">'+esc(f.who)+'</span></div>';
+               '<span class="who">'+esc(f.who)+'</span>'+
+               (f.msg?'<button class="mini" onclick="copyFlagMsg('+i+')">Copy message</button>':'')+
+               '</div>';
         });
         out+='</div>';
       });
@@ -531,10 +569,155 @@ function viewLeague(){
   return h+'</div>';
 }
 
+function copyFlagMsg(i){
+  var f=computeFlags(S.data[S.open])[i];
+  if(f&&f.msg) copyText(f.msg,"Message copied");
+}
 function copyPost(){ copyText(leaguePost(S.data[S.open]),"Post copied"); }
 function copyFlags(){
   var f=computeFlags(S.data[S.open]);
   copyText(f.map(function(x){return "- "+x.kind+": "+x.who+" — "+x.text;}).join("\n"),"Flags copied");
+}
+
+
+/* ---------- commissioner message library ---------- */
+function TEMPLATES(L){
+  var m=(L&&L.meta)||{}, set=m.settings||{}, name=m.name||"the league";
+  var teams=(L&&L.rosters.length)||"", dl=set.trade_deadline, po=set.playoff_week_start;
+  var budget=set.waiver_budget, taxi=set.taxi_years, wk=(L&&L.week)||1;
+  var dlTxt=dl?("week "+dl):"the posted deadline";
+  var poTxt=po?("week "+po):"the posted start";
+  return [
+  {g:"Preseason",t:"Season kickoff",b:
+"We're back. "+name+" opens in a couple of weeks and here's everything you need in one place.\n\n"+
+"Rosters need to be legal before week 1 kicks off. Trade deadline is "+dlTxt+". Playoffs start "+poTxt+".\n\n"+
+"Nothing in the rules changed from last year unless I've posted otherwise. If you have a question about a "+
+"setting, ask now rather than in October — I'd much rather sort it out before it costs someone a game."},
+
+  {g:"Preseason",t:"Dues reminder",b:
+"Dues for "+name+" are due before our first game. If you've already paid, thank you, ignore this.\n\n"+
+"If you haven't, please get it over this week. I'm not going to chase anyone repeatedly, but I also can't "+
+"start a season with money outstanding — it's not fair to everyone who paid on time."},
+
+  {g:"Preseason",t:"Rookie draft scheduling",b:
+"Time to lock in our rookie draft for "+name+".\n\n"+
+"Reply with the nights that work for you over the next two weeks and I'll pick whatever hits the most people. "+
+"If we can't find a live slot that works for everybody, we'll run it slow with a pick clock — that's fine, "+
+"it just means you need to keep your queue set."},
+
+  {g:"Preseason",t:"Roster and settings audit",b:
+"I went through the settings for "+name+" this week to make sure everything matches the constitution"+
+(teams?(" — "+teams+" teams"):"")+(taxi?(", taxi limit "+taxi+" years"):"")+
+(budget?(", $"+budget+" FAAB"):"")+", trade deadline "+dlTxt+".\n\n"+
+"If any of that doesn't match what you thought we agreed to, tell me now. Once we're playing games I'm not "+
+"changing settings mid-season except to fix something genuinely broken."},
+
+  {g:"In-season",t:"Lineup reminder",b:
+"Quick reminder before this week locks: check your lineup.\n\n"+
+"A few teams have had empty spots. I'm not going to police it, but an unfilled lineup affects whoever you're "+
+"playing and everyone chasing the same playoff seed, so please stay on top of it."},
+
+  {g:"In-season",t:"Waivers and FAAB explainer",b:
+"Reminder on how waivers work in "+name+".\n\n"+
+(budget?("Everyone gets $"+budget+" for the season and it does not reset. "):"")+
+"Bids are blind — you win by bidding more, and ties break by the league's standard order. Nothing processes "+
+"until the waiver run, so a bid you place early has exactly the same chance as one placed at the last minute.\n\n"+
+"Spend it how you like. Just know that once it's gone, it's gone."},
+
+  {g:"In-season",t:"Midseason check-in",b:
+"We're at week "+wk+" in "+name+". Halfway-ish point, so a few things.\n\n"+
+"Trade deadline is "+dlTxt+" — if you're out of it, this is the window where your veterans are worth the most "+
+"to somebody chasing. If you're in it, same thing in reverse.\n\n"+
+"If anyone's feeling checked out, talk to me privately. A team that quietly stops setting lineups does more "+
+"damage than one that hands the roster off cleanly."},
+
+  {g:"Deadlines",t:"Trade deadline — two weeks out",b:
+"Two weeks to the trade deadline in "+name+" ("+dlTxt+").\n\n"+
+"Standard reminder on how I handle trades: I approve them. I'm not vetoing a deal because it looks lopsided — "+
+"managers are allowed to value players differently, and rebuilds are a legitimate strategy. I'll only step in "+
+"for collusion or an account that's been compromised.\n\n"+
+"So make your case to each other, not to me."},
+
+  {g:"Deadlines",t:"Trade deadline — 48 hours",b:
+"48 hours to the deadline in "+name+". After "+dlTxt+" no trades process, including anything sitting pending.\n\n"+
+"If you've got something half-negotiated, close it out. Pending offers do not count."},
+
+  {g:"Deadlines",t:"Trade review policy",b:
+"Since it's come up, here's my standing position on trades in "+name+".\n\n"+
+"I approve trades by default. A trade being uneven is not grounds for a veto — if it were, I'd be substituting "+
+"my player evaluations for yours, and I'm not more right than you are. The only things that get a deal reversed "+
+"are collusion and a compromised account.\n\n"+
+"If you think something crosses that line, message me directly with your reasoning rather than posting it in "+
+"the league chat. I'll look at it and give you a straight answer either way."},
+
+  {g:"Playoffs",t:"Playoff picture",b:
+"Playoffs in "+name+" start "+poTxt+".\n\n"+
+"Two things worth saying now. First, if you're eliminated, keep setting your lineup — you're still affecting "+
+"who makes it and that matters to everyone. Second, tiebreakers are settled by the constitution, not by me, "+
+"so if you want to know where you stand, that's where to look.\n\n"+
+"Full seeding once the regular season closes."},
+
+  {g:"Playoffs",t:"Playoff rules reminder",b:
+"Playoff housekeeping for "+name+".\n\n"+
+"Lineups lock as usual — nobody gets a late swap because of a surprise inactive. Waivers keep running for "+
+"teams still alive. If a scoring correction lands after a game, we take the platform's final numbers, not the "+
+"screenshot from Sunday night.\n\n"+
+"None of this is new. I'd just rather say it before it costs someone a week."},
+
+  {g:"Playoffs",t:"Champion and payouts",b:
+"That's a season. Congratulations to our champion, and thanks to everyone who stayed engaged all the way through.\n\n"+
+"Payouts are going out this week. If yours hasn't landed in a few days, tell me and I'll fix it.\n\n"+
+"Offseason business starts soon: rule amendments, any roster turnover, and the rookie draft date. More shortly."},
+
+  {g:"Offseason",t:"State of the league",b:
+"Wrapping up the year in "+name+".\n\n"+
+"Payouts are settled. Here's what I want to cover before we scatter for the offseason: any rule changes people "+
+"want on the table, whether anyone is stepping away, and getting the rookie draft on the calendar early.\n\n"+
+"One ask. If you're on the fence about coming back, tell me now rather than in July. Replacing an owner in "+
+"February is easy. Replacing one three weeks before the draft is not."},
+
+  {g:"Offseason",t:"Rule amendment window",b:
+"The amendment window for "+name+" is open.\n\n"+
+"Post any rule change you want considered. Anything with support goes to a vote, and whatever passes takes "+
+"effect for next season — not retroactively, and not mid-season.\n\n"+
+"I'll run the votes and I'll abstain on anything that affects my own roster more than everyone else's."},
+
+  {g:"Offseason",t:"Orphan recruiting",b:
+"We have a team available in "+name+"."+(teams?(" "+teams+"-team dynasty."):" Dynasty league.")+"\n\n"+
+"Looking for someone who'll actually be around in the offseason — dynasty falls apart when owners disappear in "+
+"March. Previous experience is optional; being reachable is not.\n\n"+
+"If you know someone, send them my way and I'll walk them through the roster and what they'd be inheriting."}
+  ];
+}
+
+function viewMsgs(){
+  var ids=S.cfg.map(function(c){return c.league_id;});
+  if(!S.msgLeague||ids.indexOf(S.msgLeague)<0) S.msgLeague=ids[0];
+  var L=S.data[S.msgLeague];
+  var h=bar("Message library","Commissioner console",false)+'<div class="wrap">'+
+    '<button class="back" onclick="S.view=\'home\';render()">‹ All leagues</button>';
+  h+='<div class="chips">';
+  S.cfg.forEach(function(c){
+    h+='<button class="chip'+(c.league_id===S.msgLeague?" on":"")+
+       '" onclick="S.msgLeague=\''+c.league_id+'\';render()">'+
+       esc(((S.data[c.league_id]||{}).meta||{}).name||c.name)+'</button>';
+  });
+  h+='</div>';
+  if(!L) h+='<p class="note" style="margin-bottom:14px">Loading that league — deadlines and budgets '+
+            'will fill in automatically.</p>';
+  var list=TEMPLATES(L), group=null;
+  list.forEach(function(t,i){
+    if(t.g!==group){ group=t.g;
+      h+='<div class="sechd" style="margin:20px 0 10px"><span class="eyebrow">'+esc(group)+'</span></div>'; }
+    h+='<div class="tmpl"><h4>'+esc(t.t)+'</h4><p>'+esc(t.b)+'</p>'+
+       '<button class="mini" style="margin:0" onclick="copyTemplate('+i+')">Copy message</button></div>';
+  });
+  return h+'</div>';
+}
+
+function copyTemplate(i){
+  var t=TEMPLATES(S.data[S.msgLeague])[i];
+  if(t) copyText(t.b,"Message copied");
 }
 
 function render(){
@@ -542,6 +725,7 @@ function render(){
   if(S.view==="boot") h='<div class="empty">Checking in with Sleeper…</div>';
   else if(S.view==="setup") h=viewSetup();
   else if(S.view==="home") h=viewHome();
+  else if(S.view==="msgs") h=viewMsgs();
   else h=viewLeague();
   if(S.toast) h+='<div class="toast">'+esc(S.toast)+'</div>';
   document.getElementById("app").innerHTML=h;
